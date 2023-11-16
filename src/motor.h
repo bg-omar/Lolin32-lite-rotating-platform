@@ -13,7 +13,6 @@ class motor {
 public:
     static void moveOnePeriod(int dir,int ms);
     static void moveSteps(int dir, int ms, int steps);
-    static void motorStop();
 };
 
 
