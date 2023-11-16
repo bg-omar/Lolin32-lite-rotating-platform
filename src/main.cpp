@@ -1,48 +1,53 @@
 #include <Arduino.h>
+#include "ezButton.h"
 #include "main.h"
 #include "motor.h"
-#include <AccelStepper.h>
 
 
-#define MotorInterfaceType 4
-AccelStepper myStepper(MotorInterfaceType,32,33,25,26);
+ezButton powerButton(powerPin);
+ezButton buttonUp(buttonUpPin);
+ezButton buttonDown(buttonDownPin);
 
-__attribute__((unused)) void setup() {
+void setup() {
     Serial.begin(115200);
     LOGL("Serial started");
-    myStepper.setMaxSpeed(1000.0);
-    myStepper.setAcceleration(50.0);
-    myStepper.setSpeed(200);
-    myStepper.moveTo(2038);
-
     pinMode(LED_BUILTIN, OUTPUT);
-    pinMode(powerPin, INPUT);
-    pinMode(buttonUpPin, INPUT);
-    pinMode(buttonDownPin, INPUT);
+    powerButton.setDebounceTime(50); // set debounce time to 50 milliseconds
+    buttonUp.setDebounceTime(50); // set debounce time to 50 milliseconds
+    buttonDown.setDebounceTime(50); // set debounce time to 50 milliseconds
 
+    LOG(direction);
     int i;
     for(i=0;i<4;i++){
-        LOG(motorPins[i]);
+        LOG("Setup Pin: ");
+        LOGL(motorPins[i]);
         pinMode(motorPins[i], OUTPUT);
     }
 }
 
 void loop() {
+    powerButton.loop();
+    buttonUp.loop(); // MUST call the loop() function first
+    buttonDown.loop(); // MUST call the loop() function first
 
-    if (digitalRead(buttonUpPin) == HIGH) {
+    if(buttonDown.isPressed()) {
+        LOG("The buttonDown is pressed: ");
         speed++;
-        if (speed > 10) speed = 10;
-        LOG(*(&"Down is pressed: "+speed));
+        if(speed>10)        //the delay can not be less than 3ms, otherwise it will exceed speed limit of the motor
+            speed=10;
+        LOGL(speed);
     }
 
-    if (digitalRead(buttonDownPin) == HIGH) {
+    if(buttonUp.isPressed()) {
+        LOGL("The buttonUp is pressed: ");
         speed--;
-        if (speed < 3) speed = 3;
-        LOG(*(&"Up is pressed: "+speed));
+        if(speed<3)        //the delay can not be less than 3ms, otherwise it will exceed speed limit of the motor
+            speed=3;
+        LOGL(speed);
     }
 
-    if (digitalRead(powerPin) == HIGH) {
-        if (power) {
+    if (powerButton.isPressed()) {
+        if (power){
             power = false;
             motor::motorStop();
             LOGL("Power off");
@@ -57,11 +62,19 @@ void loop() {
             }
         }
     }
+
     if (power) {
-        digitalWrite(LED_BUILTIN, HIGH);
-        motor::moveSteps(direction, speed, 32);
-    } else {
-        myStepper.run();
+        digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
+        motor::moveSteps(direction, speed, 32);     //rotating
     }
+//    if (toggleSwitch.isReleased())
+//        LOGL("The switch: ON -> OFF");
+//    int state = toggleSwitch.getState();
+//    if (state == HIGH)
+//        LOGL("The switch: OFF");
+//    else
+//        LOGL("The switch: ON");
+//
+
 }
 
