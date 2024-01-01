@@ -13,8 +13,7 @@
 #define LOGL Serial.println
 #define LOG Serial.print
 
-#define USE_GET 0
-#define USE_SERVER 1
+
 /********************************************** Setup booting the arduino **************************************/
 // section Variables & Defines
 /***************************************************************************************************************/

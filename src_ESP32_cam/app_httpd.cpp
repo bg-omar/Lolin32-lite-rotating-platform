@@ -1,8 +1,3 @@
-//
-// Created by mr on 11/14/2023.
-//
-
-#include "app_httpd.h"
 // Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,11 +22,13 @@
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
+#include "app_httpd.h"
+
 #endif
 
 // Face Detection will not work on boards without (or with disabled) PSRAM
 #ifdef BOARD_HAS_PSRAM
-#define CONFIG_ESP_FACE_DETECT_ENABLED 1
+#define CONFIG_ESP_FACE_DETECT_ENABLED 0
 // Face Recognition takes upward from 15 seconds per frame on chips other than ESP32S3
 // Makes no sense to have it enabled for them
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -49,6 +46,7 @@
 #include <vector>
 #include "human_face_detect_msr01.hpp"
 #include "human_face_detect_mnp01.hpp"
+#include "app_httpd.h"
 
 #define TWO_STAGE 1 /*<! 1: detect by two-stage which is more accurate but slower(with keypoints). */
 /*<! 0: detect by one-stage which is less accurate but faster(without keypoints). */
@@ -1085,7 +1083,7 @@ static esp_err_t reg_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
-static esp_err_t greg_handler(httpd_req_t *req)
+esp_err_t app_httpd::greg_handler(httpd_req_t *req)
 {
     char *buf = NULL;
     char _reg[32];
@@ -1117,7 +1115,7 @@ static esp_err_t greg_handler(httpd_req_t *req)
     return httpd_resp_send(req, val, strlen(val));
 }
 
-static int parse_get_var(char *buf, const char * key, int def)
+int app_httpd::parse_get_var(char *buf, const char * key, int def)
 {
     char _int[16];
     if(httpd_query_key_value(buf, key, _int, sizeof(_int)) != ESP_OK){
@@ -1126,7 +1124,7 @@ static int parse_get_var(char *buf, const char * key, int def)
     return atoi(_int);
 }
 
-static esp_err_t pll_handler(httpd_req_t *req)
+esp_err_t app_httpd::pll_handler(httpd_req_t *req)
 {
     char *buf = NULL;
 
@@ -1155,7 +1153,7 @@ static esp_err_t pll_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
-static esp_err_t win_handler(httpd_req_t *req)
+ esp_err_t app_httpd::win_handler(httpd_req_t *req)
 {
     char *buf = NULL;
 
@@ -1188,7 +1186,7 @@ static esp_err_t win_handler(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
-static esp_err_t index_handler(httpd_req_t *req)
+ esp_err_t app_httpd::index_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
@@ -1207,8 +1205,7 @@ static esp_err_t index_handler(httpd_req_t *req)
     }
 }
 
-void startCameraServer()
-{
+void app_httpd::startCameraServer() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 16;
 
@@ -1357,12 +1354,7 @@ void startCameraServer()
 
     ra_filter_init(&ra_filter, 20);
 
-#if CONFIG_ESP_FACE_RECOGNITION_ENABLED
-    recognizer.set_partition(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "fr");
 
-    // load ids from flash partition
-    recognizer.set_ids_from_flash();
-#endif
     log_i("Starting web server on port: '%d'", config.server_port);
     if (httpd_start(&camera_httpd, &config) == ESP_OK)
     {
@@ -1397,3 +1389,7 @@ void setupLedFlash(int pin)
     log_i("LED flash is disabled -> CONFIG_LED_ILLUMINATOR_ENABLED = 0");
 #endif
 }
+
+
+
+
