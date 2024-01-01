@@ -14,13 +14,16 @@
 #define LOG Serial.print
 
 #define USE_GET 0
-#define USE_SERVER 0
+#define USE_SERVER 1
+/********************************************** Setup booting the arduino **************************************/
+// section Variables & Defines
+/***************************************************************************************************************/
 
-//#define RH_speed  2000
-//#define rxPin 3
-//#define txPin 1
-//#define pttPin  10
-//#define pttInverted 0
+#define EVENTS 0
+#define BUTTONS 0
+#define JOYSTICKS 0
+#define SENSORS 0
+
 
 bool power = true;
 int direction = 0;

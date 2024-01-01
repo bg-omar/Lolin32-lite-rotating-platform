@@ -2,22 +2,6 @@
 // Created by mr on 11/14/2023.
 //
 
-#include <Arduino.h>
-#include "esp_gap_bt_api.h"
-#include <PS4Controller.h>
-#include "main.h"
-
-#include "esp_camera.h"
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ESP32Servo.h>
-#include <driver/adc.h>
-
-
-
-#include <SPI.h> // Not actually used but needed to compile
-
-
 /*
     UNO BLE -->     DC:54:75:C3:D9:EC   -
     PC USB Dongel   00:1F:E2:C8:82:BA
@@ -35,23 +19,38 @@
 // section Includes
 /***************************************************************************************************************/
 
+#include <Arduino.h>
+#include "esp_gap_bt_api.h"
+#include <PS4Controller.h>
+#include "main.h"
+
+#include "esp_camera.h"
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ESP32Servo.h>
+#include <driver/adc.h>
+
+
+
+#include <SPI.h> // Not actually used but needed to compile
+
+
+// ===================
+// Select camera model
+// ===================
+//#define CAMERA_MODEL_WROVER_KIT // Has PSRAM
+//#define CAMERA_MODEL_ESP_EYE // Has PSRAM
+//#define CAMERA_MODEL_ESP32S3_EYE // Has PSRAM
+//#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+// ** Espressif Internal Boards **
+#define CAMERA_MODEL_ESP32_CAM_BOARD
+//#define CAMERA_MODEL_ESP32S2_CAM_BOARD
+#include "camera_pins.h"
 
 
 
 
 
-/********************************************** Setup booting the arduino **************************************/
-// section Variables & Defines
-/***************************************************************************************************************/
-
-#define EVENTS 0
-#define BUTTONS 0
-#define JOYSTICKS 0
-#define SENSORS 0
-
-unsigned long lastTimeStamp = 0;
-
-int lastBattery;
 
 
 Servo myservo;  // create servo object
@@ -82,7 +81,7 @@ unsigned long timerDelay = 5000;
 
 
 void onConnect() {
-    lastBattery = PS4.Battery();
+//    lastBattery = PS4.Battery();
     Serial.println(&"PS4 Connected!" [ PS4.Battery()]);
     Serial.println("");
 }
@@ -182,7 +181,7 @@ void notify() {
                 PS4.AccY(),
                 PS4.AccZ());
 #endif
-    lastTimeStamp = millis();
+
 }
 
 
@@ -195,35 +194,6 @@ void notify() {
 void startCameraServer();
 void setupLedFlash(int pin);
 
-String httpGETRequest(const char* serverName) {
-    HTTPClient http;
-
-    // Your IP address with path or Domain name with URL path
-    http.begin(serverName);
-
-    // If you need Node-RED/server authentication, insert user and password below
-    //http.setAuthorization("REPLACE_WITH_SERVER_USERNAME", "REPLACE_WITH_SERVER_PASSWORD");
-
-
-    // Send HTTP POST request
-    int httpResponseCode = http.GET();
-
-    String payload = "{}";
-
-    if (httpResponseCode>0) {
-        Serial.print("HTTP Response code: ");
-        Serial.println(httpResponseCode);
-        payload = http.getString();
-    }
-    else {
-        Serial.print("Error code: ");
-        Serial.println(httpResponseCode);
-    }
-    // Free resources
-    http.end();
-
-    return payload;
-}
 
 /********************************************** Setup booting the arduino **************************************/
 // section Setup
@@ -380,51 +350,54 @@ void setup() {
 
 void loop() {
     if (PS4.isConnected()) {
-        if (PS4.Up())        send(posx +=1);
-        if (PS4.Right())     send(1200);
-        if (PS4.Down())      send(posx -=1);
-        if (PS4.Left())      send(1400);
+        if (PS4.Up()) send(posx += 1);
+        if (PS4.Right()) send(100);
+        if (PS4.Down()) send(posx -= 1);
+        if (PS4.Left()) send(100);
 
-        if (PS4.UpRight())   send(1500);
-        if (PS4.DownRight()) send(1600);
-        if (PS4.DownLeft())  send(1700);
-        if (PS4.UpLeft())    send(1800);
+//        if (PS4.UpRight())   send(1500);
+//        if (PS4.DownRight()) send(1600);
+//        if (PS4.DownLeft())  send(1700);
+//        if (PS4.UpLeft())    send(1800);
+//
+//        if (PS4.L1())        send(2100);
+//        if (PS4.R1())        send(2200);
 
-        if (PS4.L1())        send(2100);
-        if (PS4.R1())        send(2200);
+//        if (PS4.L3())        send(2300);
+//        if (PS4.R3())        send(2400);
 
-        if (PS4.L3())        send(2300);
-        if (PS4.R3())        send(2400);
+//        if (PS4.PSButton())  send(2500);
+//        if (PS4.Touchpad())  send(2700);
+//
+//        if (PS4.Share())     send(2800);
+//        if (PS4.Options())   send(2900);
 
-        if (PS4.PSButton())  send(2500);
-        if (PS4.Touchpad())  send(2700);
+        if (PS4.Square()) send(100);
+        if (PS4.Cross()) send(100);
+        if (PS4.Circle()) send(100);
+        if (PS4.Triangle()) send(100);
 
-        if (PS4.Share())     send(2800);
-        if (PS4.Options())   send(2900);
+//        if (PS4.Charging())  send(3500);
+//        if (PS4.Audio())     send(3600);
+//        if (PS4.Mic())       send(3700);
+//        if (PS4.Battery() < lastBattery) send(3900 + PS4.Battery());
 
-        if (PS4.Square())    send(3100);
-        if (PS4.Cross())     send(3200);
-        if (PS4.Circle())    send(3300);
-        if (PS4.Triangle())  send(3400);
+//        if (PS4.L2()) { Serial.println(4000 + PS4.L2Value());  }
+//        if (PS4.R2()) { Serial.println(5000 + PS4.R2Value());  }
 
-        if (PS4.Charging())  send(3500);
-        if (PS4.Audio())     send(3600);
-        if (PS4.Mic())       send(3700);
-        if (PS4.Battery() < lastBattery) send(3900 + PS4.Battery());
+        if (PS4.LStickX() <= -15 || PS4.LStickX() >= 15) { send(100 + (PS4.LStickX() / 8)); }
+        if (PS4.LStickX() >= -15 || PS4.LStickX() <= 15) send(100);
+        if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15) { send(100 + (PS4.LStickY() / 8)); }
+        if (PS4.LStickY() >= -15 || PS4.LStickY() <= 15) send(100);
 
-        if (PS4.L2()) { Serial.println(4000 + PS4.L2Value());  }
-        if (PS4.R2()) { Serial.println(5000 + PS4.R2Value());  }
-
-        if (PS4.LStickX() <= -15 || PS4.LStickX() >= 15 ) { Serial.println(6127 + PS4.LStickX()); } // 6 000 - 6 254
-        if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15 ) { Serial.println(7127 + PS4.LStickY()); } // 7 000 - 7 254
-
-        if (PS4.RStickX() <= -15 || PS4.RStickX() >= 15 ) { Serial.println(8127 + PS4.RStickX()); } // 8 000 - 8 254
-        if (PS4.RStickY() <= -15 || PS4.RStickY() >= 15 ) { Serial.println(9127 + PS4.RStickY()); } // 9 000 - 9 254
+//        if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15 ) { Serial.println(7127 + PS4.LStickY()); } // 7 000 - 7 254
+//
+//        if (PS4.RStickX() <= -15 || PS4.RStickX() >= 15 ) { Serial.println(8127 + PS4.RStickX()); } // 8 000 - 8 254
+//        if (PS4.RStickY() <= -15 || PS4.RStickY() >= 15 ) { Serial.println(9127 + PS4.RStickY()); } // 9 000 - 9 254
 
         delay(15);
+
     }
-
-
 
 #if USE_GET
     const char *serverNm = "http://192.168.1.8:1880/update-sensor";
