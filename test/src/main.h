@@ -6,6 +6,9 @@
 #define ARDUINO_ESP_32_CAM_MAIN_H
 
 
+class main {
+
+};
 
 
 #endif //ARDUINO_ESP_32_CAM_MAIN_H
