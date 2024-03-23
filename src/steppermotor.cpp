@@ -2,7 +2,7 @@
 // Created by mr on 11/15/2023.
 //
 #include "Arduino.h"
-#include "motor.h"
+#include "steppermotor.h"
 
 //as for four phase stepping motor, four steps is a cycle. the function is used to drive the stepping motor clockwise or anticlockwise to take four steps
 void motor::moveOnePeriod(int dir,int ms){

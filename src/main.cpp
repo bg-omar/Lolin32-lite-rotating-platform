@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "main.h"
-#include "motor.h"
+#include "steppermotor.h"
 
 int direction = 0;
 int speed = 3;
