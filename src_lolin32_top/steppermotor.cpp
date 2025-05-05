@@ -5,7 +5,7 @@
 #include "steppermotor.h"
 
 //as for four phase stepping motor, four steps is a cycle. the function is used to drive the stepping motor clockwise or anticlockwise to take four steps
-void motor::moveOnePeriod(int dir,int ms){
+void stepperMotor::moveOnePeriod(int dir, int ms){
     for (int j=0;j<4;j++){  //cycle according to power supply order
         for (int i=0;i<4;i++){  //assign to each pin, a total of 4 pins
             if(dir == 1)
@@ -19,8 +19,9 @@ void motor::moveOnePeriod(int dir,int ms){
     }
 }
 
-void motor::moveSteps(int dir, int ms, int steps){
-    for(int i=0;i<steps;i++){
+void stepperMotor::moveSteps(int dir, int ms, int steps){
+	if (steps <= 0) return;  // No action for zero or negative steps
+	for(int i=0;i<steps;i++){
         moveOnePeriod(dir,ms);
     }
 }

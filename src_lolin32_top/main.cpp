@@ -1,35 +1,84 @@
-#include <Arduino.h>
+
 #include "main.h"
 #include "steppermotor.h"
+#include "barometer.h"
+#include "compass.h"
+#include "gyroscope.h"
 #include <SPI.h> // Not actually used but needed to compile
-
+#include "driver/adc.h"
+#include "driver/ledc.h"
 #include "esp_gap_bt_api.h"
+
+#include <esp_adc_cal.h>
+#include "driver/adc.h"
+#include "driver/ledc.h"
+#include "driver/touch_pad.h"
+
+#include "motor.h"
+#include "I2Cscanner.h"
 #include <PS4Controller.h>
 #include <cstdint>
 
-#define LED_BUILTIN 22
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+#define OLED_SDA 8
+#define OLED_SCL 9
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 
-#define PS4CONTROLLER 1
-#define EVENTS 0
-#define BUTTONS 0
-#define JOYSTICKS 0
-#define SENSORS 0
-#define THUMB_STICKS 0
+bool main::Found_Gyro = false;
+bool main::Found_Compass = false;
+bool main::Found_Barometer = false;
+
+//
+int pin2channel[64]; // holds the PWM channel (0-15) attached to a given pin (0-63)
+
+void setupAnalogWritePin(int pin, int channel, int freq=500, int resolution=8)
+{
+	ledcSetup(channel, freq, resolution);
+	pin2channel[pin] = channel;
+	ledcAttachPin(pin, pin2channel[pin]);
+	ledcWrite(channel, 0);
+}
+
+void analogWriteESP32(int pin, int value)
+{
+	ledcWrite(pin2channel[pin], value);
+}
+
+const int SERVO = 32;         // Pin to control (pulse) servo
+const int SERVO_CHANNEL = 0;  // 0-15
+const int SERVO_FREQ = 50;    // 50Hz
+const int SERVO_RES = 16;     // 16 bit resolution
+
+const int POT   = 33; // Pin to middle tap of pot
+
+const int MIN_PULSE = 1575; // 0.48mS previously 0xFFFF/20 for 1.0mS
+const int MAX_PULSE = 7335; // 2.24mS previously 0xFFFF/10 for 2.0mS
+
+int val = 0; // For storing the reading from the POT
+// the number of the LED pin
+const int warmLedPin = 25;  // 16 corresponds to GPIO 16
+const int coldLedPin = 26;  // 16 corresponds to GPIO 16
+int coldPWM =  0;
+int warmPWM =  0;
+int motorSpeed =  0;
 
 
-#include <ESP32Servo.h>
 
+int prevSpeed, prevMs, prevDirection;
 
-
-Servo myservo;  // create servo object
-
-int posx = 93;    // variable to store the servo position
 int r = 255;
 int g = 0;
 int b = 0;
 #if PS4CONTROLLER
-float brightness = 0;
+	float brightness = 0;
     bool forward = true;
     // Calculates the next value in a rainbow sequence
     void nextRainbowColor() {
@@ -39,12 +88,12 @@ float brightness = 0;
     }
 
     void onConnect() {
-        Serial.println("PS4 Connected!");
-        Serial.println("");
+        LOGL("PS4 Connected!");
+        LOGL("");
     }
 
     void onDisConnect() {
-        Serial.println("Disconnected!");
+        LOGL("Disconnected!");
     }
 
 
@@ -122,40 +171,73 @@ float brightness = 0;
 #endif
 
 
-void send(const String& texting) {
-    Serial.println(texting);
+void send(const char *texting) {
+    LOGL((const char *) texting);
 }
-
-/*
-    UNO BLE -->     DC:54:75:C3:D9:EC   -
-    PC USB Dongel   00:1F:E2:C8:82:BA
-    ESP 1           66:CB:3E:E9:02:8A
-    ESP             3c:e9:0e:89:80:84
-    ESP small cam   3C:E9:0E:88:65:16
-    PS4 Controller: A4:AE:11:E1:8B:B3 (SONYWA) GooglyEyes
-    PS5 Controller: 88:03:4C:B5:00:66
-*/
 
 
 int direction = 1;
 int speed = 0;
 
+
 void setup() {
     Serial.begin(115200);
+
+	Wire.begin(OLED_SDA, OLED_SCL);
+
+	if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // 0x3C is common I2C address
+		Serial.println(F("SSD1306 allocation failed"));
+		for(;;);
+	}
+	display.clearDisplay();
+	display.setTextSize(1);
+	display.setTextColor(SSD1306_WHITE);
+	display.setCursor(0, 0);
+	display.print("Initializing...");
+	display.display();
+	delay(500);
+
+	#if USE_I2C_SCANNER
+	I2Cscanner::scan();
+			delay(500);
+	#endif
+
+	main::printPSI_I2O();
+
+	delay(500);
+	gyroscope::gyroSetup();
+	delay(500);
+
+	compass::compassSetup();
+	delay(500);
+
+	barometer::baroSetup();
+	delay(500);
+
     pinMode(LED_BUILTIN, OUTPUT);
-    Serial.println("Stepper Motor ");
+    LOGL("Stepper Motor ");
     int i;
     for(i=0;i<4;i++){
         LOG("Setup Pin: ");
-        LOGL(motorPins[i]);
+        LOGLI(motorPins[i]);
         pinMode(motorPins[i], OUTPUT);
     }
+	pinMode(SERVO, PULLDOWN);
+	LOG("Servo pin");
+	pinMode(coldLedPin, PULLDOWN);
+	pinMode(warmLedPin, PULLDOWN);
+
+
+	pinMode(motorPin, OUTPUT);
+	pinMode(led, OUTPUT);
+	digitalWrite(led, 0);
+	analogWrite(motorPin, 0);  // 🚀 Ensure motor starts OFF
 
     #if PS4CONTROLLER
         PS4.attach(notify);
         PS4.attachOnConnect(onConnect);
         PS4.attachOnDisconnect(onDisConnect);
-        PS4.begin("3C:E9:0E:88:65:16"); //mac Address that ESP should use
+        PS4.begin("00:1a:7d:da:71:13"); //mac Address that ESP should use
 
         /* Remove Paired Devices  */
         uint8_t pairedDeviceBtAddr[20][6];
@@ -164,12 +246,23 @@ void setup() {
         for (int i = 0; i < count; i++) {
             esp_bt_gap_remove_bond_device(pairedDeviceBtAddr[i]);
         }
-        Serial.println("my BT mac -> 3C:E9:0E:88:65:16");
-        Serial.println("Ready for PS4");
+        LOGL("my BT mac -> 00:1a:7d:da:71:13");
+        LOGL("Ready for PS4");
     #endif
 }
 
 void loop() {
+	if(main::Found_Gyro){
+		gyroscope::gyroDetectMovement();
+	}
+
+	if(main::Found_Barometer){
+		barometer::baroMeter();
+	}
+
+	if(main::Found_Compass){
+		compass::showCompass();
+	}
 
 #if PS4CONTROLLER
     if (PS4.isConnected() ){
@@ -179,22 +272,22 @@ void loop() {
         if (PS4.Down()) speed -= 1;
         if (PS4.Left()) speed -= 3;
 
-        if (PS4.Square()) speed = 5 ;
-        if (PS4.Cross()) speed = 10 ;
-        if (PS4.Circle()) speed = -12 ;
-        if (PS4.Triangle()) speed = -5 ;
+        if (PS4.Square()) coldPWM -= 1 ;
+        if (PS4.Cross()) coldPWM += 1 ;
+        if (PS4.Circle()) warmPWM -= 1 ;
+        if (PS4.Triangle()) warmPWM += 1 ;
 
-        if (PS4.L1())        speed = 0 ;
-        if (PS4.R1())        speed = 0 ;
+        if (PS4.L1())        motorSpeed -= 1 ;
+        if (PS4.R1())        motorSpeed += 1 ;
 
         if (PS4.L3())        send("2300");
-        if (PS4.R3())        send("2400");
+        //if (PS4.R3())        send("2400");
         if (PS4.Share())     send("2800");
         if (PS4.Options())   send("2900");
         if (PS4.PSButton())  send("2500");
         if (PS4.Touchpad()) {
             Serial.print("Battery Level: ");
-            Serial.println(PS4.Battery());
+            LOGLI(PS4.Battery());
         }
 
 #if THUMB_STICKS
@@ -218,13 +311,13 @@ void loop() {
                 );
             }
 #elif BUTTONS
-        if (PS4.L2()) { Serial.println(4000 + PS4.L2Value());  }
-            if (PS4.R2()) { Serial.println(5000 + PS4.R2Value());  }
-            if (PS4.LStickX() <= -15 || PS4.LStickX() >= 15 ) { Serial.println(6127 + PS4.LStickX()); } // 6 000 - 6 254
-            if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15 ) { Serial.println(7127 + PS4.LStickY()); } // 7 000 - 7 254
+        if (PS4.L2()) { LOGL(4000 + PS4.L2Value());  }
+            if (PS4.R2()) { LOGL(5000 + PS4.R2Value());  }
+            if (PS4.LStickX() <= -15 || PS4.LStickX() >= 15 ) { LOGL(6127 + PS4.LStickX()); } // 6 000 - 6 254
+            if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15 ) { LOGL(7127 + PS4.LStickY()); } // 7 000 - 7 254
 
-            if (PS4.RStickX() <= -15 || PS4.RStickX() >= 15 ) { Serial.println(8127 + PS4.RStickX()); } // 8 000 - 8 254
-            if (PS4.RStickY() <= -15 || PS4.RStickY() >= 15 ) { Serial.println(9127 + PS4.RStickY()); } // 9 000 - 9 254
+            if (PS4.RStickX() <= -15 || PS4.RStickX() >= 15 ) { LOGL(8127 + PS4.RStickX()); } // 8 000 - 8 254
+            if (PS4.RStickY() <= -15 || PS4.RStickY() >= 15 ) { LOGL(9127 + PS4.RStickY()); } // 9 000 - 9 254
 #endif
 
         if (PS4.Battery() < 2) {
@@ -240,25 +333,127 @@ void loop() {
 
     }
 #endif
-    int ms = map(speed, 0, 10, 30, 3 );
-    if (ms >= 32) ms = map(ms, 32, 60, 28, 3 );
+	// Ensure speed is within limits
+	speed = constrain(speed, -20, 20);
+    int ms = map(speed, 0, 20, 60, 3 );
+    if (ms >= 62) ms = map(ms, 62, 120, 58, 3 );
 
     if (ms < 3 ) ms = 3;
-    if (speed > 10 ) speed = 10;
-    if (speed < -12 ) speed = -12;
-    if (speed < 0) {
-        direction = 0;
-    } else { direction = 1;}
+	
+	direction = (speed < 0) ? 0 : 1;
 
-    Serial.print("speed: ");
-    Serial.print(speed);
-    Serial.print("\t - ms: ");
-    Serial.print(ms);
-    Serial.print("\t - direction: ");
-    Serial.println(direction);
+	if (prevSpeed != speed || prevMs != ms || prevDirection != direction) {
+		LOG("speed: ");
+		LOGI(speed);
 
-    if (speed != 0)  motor::moveSteps(direction, ms, 4);
-    delay(5);
+		LOG("\t - ms: ");
+		LOGI(ms);
 
+		LOG("\t - direction: ");
+		LOGLI(direction);
+	}
+
+    if (speed != 0) { stepperMotor::moveSteps(direction, ms, 1);
+	} else {
+		delay(15);
+	}
+	prevSpeed = speed;
+	prevMs = ms;
+	prevDirection = direction;
+
+	motorSpeed = constrain(motorSpeed, 0, 10);
+	int motorPWM = map(motorSpeed, 0, 10, 0, 255);
+	analogWriteESP32(SERVO, motorPWM); // Set the motor speed using PWM
+
+	// Map speed to LED brightness
+	int coldBrightness = map(coldPWM, 0, 10, 0, 255); // Negative speed dims cold LED
+	int warmBrightness = map(warmPWM, 0, 10, 0, 255);  // Positive speed dims warm LED
+
+	// Clamp brightness values to valid range
+	coldBrightness = constrain(coldBrightness, 0, 255);
+	warmBrightness = constrain(warmBrightness, 0, 255);
+
+	// Write PWM to LED strips
+	analogWriteESP32(coldLedPin, coldBrightness);
+	analogWriteESP32(warmLedPin, warmBrightness);
+
+	#if VERBOSE
+		LOG("motorSpeed: ");
+		LOG(motorSpeed);
+
+		LOG("\t coldBrightness ");
+		LOG(coldBrightness);
+
+		LOG("\t - warmBrightness: ");
+		LOGL(warmBrightness);
+	#endif
 }
 
+void main::printPSI_I2O() {
+	Serial.print("\t SS: ");
+	Serial.print(SS);
+	Serial.print("\t MOSI: ");
+	Serial.print(MOSI);
+	Serial.print("\t MISO: ");
+	Serial.print(MISO);
+	Serial.print("\t SCK: ");
+	Serial.println(SCK);
+
+	Serial.print("\t SDA: ");
+	Serial.print(SDA);
+	Serial.print("\t SCL: ");
+	Serial.println(SCL);
+	Serial.println("");
+}
+
+
+
+void main::log(const char* text) {
+	Serial.print(text);
+	display.print(text);
+}
+
+void main::logln(const char* text) {
+	Serial.println(text);
+	display.println(text);
+}
+
+void main::logDoubble(double floaty) {
+	Serial.print(floaty);
+	display.print(floaty);
+}
+
+void main::logDoubbleln(double floaty) {
+	Serial.println(floaty);
+	display.println(floaty);
+}
+
+void main::logFloat(float floaty) {
+	Serial.print(floaty);
+	display.print(floaty);
+}
+
+void main::logFloatln(float floaty) {
+	Serial.println(floaty);
+	display.println(floaty);
+}
+
+void main::logInt(int inty) {
+	Serial.print(inty);
+	display.print(inty);
+}
+
+void main::logIntln(int inty) {
+	Serial.println(inty);
+	display.println(inty);
+}
+
+void main::logHex(unsigned char hexy, int i) {
+	Serial.println(hexy, i);
+	display.print(hexy);
+}
+
+void main::logHexln(unsigned char hexy, int i) {
+	Serial.println(hexy, i);
+	display.println(hexy);
+}

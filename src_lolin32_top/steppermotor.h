@@ -9,7 +9,7 @@ const int motorPins[]={32,33,25,26};    //define pins connected to four phase AB
 const int CCWStep[]={0x01,0x02,0x04,0x08};  //define power supply order for coil for rotating anticlockwise
 const int CWStep[]={0x08,0x04,0x02,0x01};   //define power supply order for coil for rotating clockwise
 
-class motor {
+class stepperMotor {
 public:
     static void moveOnePeriod(int dir,int ms);
     static void moveSteps(int dir, int ms, int steps);

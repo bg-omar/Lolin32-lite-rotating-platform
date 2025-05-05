@@ -2,12 +2,13 @@
 <project version="4">
   <component name="CidrRootsConfiguration">
     <sourceRoots>
-      <file path="$PROJECT_DIR$/src" />
+      <file path="$PROJECT_DIR$/src_lolin32_top" />
     </sourceRoots>
     <excludeRoots>
+      <file path="$PROJECT_DIR$/src" />
       <file path="$PROJECT_DIR$/src_ESP32_cam" />
       <file path="$PROJECT_DIR$/src_lolin32_bottom" />
-      <file path="$PROJECT_DIR$/src_lolin32_top" />
+      <file path="$PROJECT_DIR$/src_lolin32_stepper" />
     </excludeRoots>
   </component>
   <component name="ExternalStorageConfigurationManager" enabled="true" />
