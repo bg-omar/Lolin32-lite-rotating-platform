@@ -50,5 +50,9 @@ void I2Cscanner::scan() {
     delay(100);
     if (nDevices == 0) {
         LOGL("-- No I2C devices found--");
+		main::Found_I2C = false;
+	} else {
+		LOGL("-- I2C scan completed --");
+		main::Found_I2C = true;
     }
 }

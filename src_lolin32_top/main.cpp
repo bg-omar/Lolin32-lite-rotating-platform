@@ -14,7 +14,6 @@
 #include "driver/ledc.h"
 #include "driver/touch_pad.h"
 
-#include "motor.h"
 #include "I2Cscanner.h"
 #include <PS4Controller.h>
 #include <cstdint>
@@ -26,8 +25,8 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1
-#define OLED_SDA 8
-#define OLED_SCL 9
+#define OLED_SDA I2C_SDA // 23
+#define OLED_SCL I2C_SCL //19
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
@@ -35,6 +34,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool main::Found_Gyro = false;
 bool main::Found_Compass = false;
 bool main::Found_Barometer = false;
+bool main::Found_Display = false;
+bool main::Found_I2C = false;
 
 //
 int pin2channel[64]; // holds the PWM channel (0-15) attached to a given pin (0-63)
@@ -52,27 +53,31 @@ void analogWriteESP32(int pin, int value)
 	ledcWrite(pin2channel[pin], value);
 }
 
-const int SERVO = 32;         // Pin to control (pulse) servo
+const int SERVO = 12;         // Pin to control (pulse) servo
+const int SERVO2   = 14; // Pin to middle tap of pot
 const int SERVO_CHANNEL = 0;  // 0-15
-const int SERVO_FREQ = 50;    // 50Hz
-const int SERVO_RES = 16;     // 16 bit resolution
+const int SERVO_FREQ = 500;    // 50Hz
+const int SERVO_RES = 8;     // 16 bit resolution
 
-const int POT   = 33; // Pin to middle tap of pot
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
+const unsigned long blinkInterval = 1000;  // 1 second
 
-const int MIN_PULSE = 1575; // 0.48mS previously 0xFFFF/20 for 1.0mS
-const int MAX_PULSE = 7335; // 2.24mS previously 0xFFFF/10 for 2.0mS
+
+const int MIN_PULSE = 544; // 0.48mS previously 0xFFFF/20 for 1.0mS
+const int MAX_PULSE = 2400; // 2.24mS previously 0xFFFF/10 for 2.0mS
 
 int val = 0; // For storing the reading from the POT
 // the number of the LED pin
-const int warmLedPin = 25;  // 16 corresponds to GPIO 16
-const int coldLedPin = 26;  // 16 corresponds to GPIO 16
-int coldPWM =  0;
-int warmPWM =  0;
-int motorSpeed =  0;
+const int warmLedPin = 16;  // 16 corresponds to GPIO 16
+const int coldLedPin = 17;  // 16 corresponds to GPIO 16
+int coldPWM =  0; // Cold LED PWM value
+int warmPWM =  0; // Warm LED PWM value
 
-
-
+int motorSpeed = 0;
+int motor2Speed =  0;
 int prevSpeed, prevMs, prevDirection;
+int prevMotorPWM, prevMotor2PWM, prevCold, prevWarm;
 
 int r = 255;
 int g = 0;
@@ -180,58 +185,73 @@ int direction = 1;
 int speed = 0;
 
 
+
+
 void setup() {
     Serial.begin(115200);
-
+	pinMode(SERVO, PULLDOWN);
+	pinMode(SERVO2, PULLDOWN);
+	LOG("Servo pin");
+	pinMode(led, OUTPUT);
+	digitalWrite(led, LOW);
 	Wire.begin(OLED_SDA, OLED_SCL);
 
-	if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // 0x3C is common I2C address
+	if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // 0x3C is common I2C address
 		Serial.println(F("SSD1306 allocation failed"));
-		for(;;);
+	} else {
+		main::Found_Display = true;
+		LOGL("SSD1306 Display found");
+		display.setRotation(2); // 0, 1, 2, or 3
+		display.setTextColor(SSD1306_WHITE);
+		display.setTextSize(1);
+		display.setCursor(0, 0);
+		display.clearDisplay();
+		display.print("Initializing...");
+		display.display();
+		LOGL("SSD1306 Display initialized");
+		delay(500);
 	}
-	display.clearDisplay();
-	display.setTextSize(1);
-	display.setTextColor(SSD1306_WHITE);
-	display.setCursor(0, 0);
-	display.print("Initializing...");
-	display.display();
+
 	delay(500);
 
 	#if USE_I2C_SCANNER
-	I2Cscanner::scan();
-			delay(500);
+		I2Cscanner::scan();
+		delay(500);
 	#endif
 
 	main::printPSI_I2O();
 
-	delay(500);
-	gyroscope::gyroSetup();
-	delay(500);
+	if (main::Found_I2C) {
+		delay(500);
+		gyroscope::gyroSetup();
+		delay(500);
 
-	compass::compassSetup();
-	delay(500);
+		compass::compassSetup();
+		delay(500);
 
-	barometer::baroSetup();
-	delay(500);
+		barometer::baroSetup();
+		delay(500);
+	}
 
-    pinMode(LED_BUILTIN, OUTPUT);
     LOGL("Stepper Motor ");
     int i;
     for(i=0;i<4;i++){
-        LOG("Setup Pin: ");
+        LOG("Stepper Pin: ");
         LOGLI(motorPins[i]);
         pinMode(motorPins[i], OUTPUT);
     }
-	pinMode(SERVO, PULLDOWN);
-	LOG("Servo pin");
+
 	pinMode(coldLedPin, PULLDOWN);
 	pinMode(warmLedPin, PULLDOWN);
 
 
-	pinMode(motorPin, OUTPUT);
+	setupAnalogWritePin(SERVO, SERVO_CHANNEL, SERVO_FREQ, SERVO_RES);
+	setupAnalogWritePin(SERVO2, SERVO_CHANNEL + 1, SERVO_FREQ, SERVO_RES);
+
+
 	pinMode(led, OUTPUT);
 	digitalWrite(led, 0);
-	analogWrite(motorPin, 0);  // 🚀 Ensure motor starts OFF
+
 
     #if PS4CONTROLLER
         PS4.attach(notify);
@@ -252,33 +272,44 @@ void setup() {
 }
 
 void loop() {
-	if(main::Found_Gyro){
-		gyroscope::gyroDetectMovement();
+
+	if (main::Found_I2C) {
+		if(main::Found_Gyro){
+			LOGL("Ready for Found_Gyro");
+			gyroscope::gyroDetectMovement();
+		}
+
+		if(main::Found_Barometer){
+			LOGL("Ready for Found_Barometer");
+			barometer::baroMeter();
+		}
+
+		if(main::Found_Compass){
+			LOGL("Ready for Found_Compass");
+			compass::showCompass();
+		}
 	}
 
-	if(main::Found_Barometer){
-		barometer::baroMeter();
-	}
-
-	if(main::Found_Compass){
-		compass::showCompass();
-	}
 
 #if PS4CONTROLLER
     if (PS4.isConnected() ){
+		digitalWrite(led, HIGH);  // LED off when connected
+		// Reset blink logic so it starts fresh next time we disconnect
+		lastBlinkTime = millis();
+		ledState = true;
 
-        if (PS4.Up()) speed += 1;
-        if (PS4.Right()) speed += 3;
-        if (PS4.Down()) speed -= 1;
-        if (PS4.Left()) speed -= 3;
+        if (PS4.Up()) motor2Speed += 1;
+        if (PS4.Right()) speed += 1;
+        if (PS4.Down()) motor2Speed -= 1;
+        if (PS4.Left()) speed -= 1;
 
-        if (PS4.Square()) coldPWM -= 1 ;
-        if (PS4.Cross()) coldPWM += 1 ;
-        if (PS4.Circle()) warmPWM -= 1 ;
-        if (PS4.Triangle()) warmPWM += 1 ;
+        if (PS4.Square()) motor2Speed -= 50 ;
+        if (PS4.Cross()) motor2Speed += 50 ;
+        if (PS4.Circle()) motor2Speed = 0 ;
+        if (PS4.Triangle()) motor2Speed = 200 ;
 
-        if (PS4.L1())        motorSpeed -= 1 ;
-        if (PS4.R1())        motorSpeed += 1 ;
+        if (PS4.L1())        motor2Speed -= 10 ;
+        if (PS4.R1())        motor2Speed += 10 ;
 
         if (PS4.L3())        send("2300");
         //if (PS4.R3())        send("2400");
@@ -330,8 +361,16 @@ void loop() {
 
         PS4.setLed(r, g, b);
         PS4.sendToController();
-
-    }
+		delay(25);
+    } else {
+		// Non-blocking LED blinking when not connected
+		unsigned long currentMillis = millis();
+		if (currentMillis - lastBlinkTime >= blinkInterval) {
+			lastBlinkTime = currentMillis;
+			ledState = !ledState; // Toggle LED state
+			digitalWrite(led, ledState ? HIGH : LOW);
+		}
+	}
 #endif
 	// Ensure speed is within limits
 	speed = constrain(speed, -20, 20);
@@ -339,7 +378,7 @@ void loop() {
     if (ms >= 62) ms = map(ms, 62, 120, 58, 3 );
 
     if (ms < 3 ) ms = 3;
-	
+
 	direction = (speed < 0) ? 0 : 1;
 
 	if (prevSpeed != speed || prevMs != ms || prevDirection != direction) {
@@ -361,32 +400,42 @@ void loop() {
 	prevMs = ms;
 	prevDirection = direction;
 
-	motorSpeed = constrain(motorSpeed, 0, 10);
-	int motorPWM = map(motorSpeed, 0, 10, 0, 255);
-	analogWriteESP32(SERVO, motorPWM); // Set the motor speed using PWM
-
-	// Map speed to LED brightness
+	motorSpeed = constrain(motorSpeed, 0, 200);
+	motor2Speed = constrain(motor2Speed, 0, 200);
+	// Clamp brightness values to valid range
+	coldPWM = constrain(coldPWM, 0, 10);
+	warmPWM = constrain(warmPWM, 0, 10);
+	int motorPWM = map(motorSpeed, 0, 200, 0, 255);
+	int motor2PWM = map(motor2Speed, 0, 200, 0, 255);
 	int coldBrightness = map(coldPWM, 0, 10, 0, 255); // Negative speed dims cold LED
 	int warmBrightness = map(warmPWM, 0, 10, 0, 255);  // Positive speed dims warm LED
 
-	// Clamp brightness values to valid range
-	coldBrightness = constrain(coldBrightness, 0, 255);
-	warmBrightness = constrain(warmBrightness, 0, 255);
 
-	// Write PWM to LED strips
+	analogWrite(SERVO, motorPWM); // Set the motor speed using PWM
+	analogWrite(SERVO2, motor2PWM); // Set the motor speed using PWM
 	analogWriteESP32(coldLedPin, coldBrightness);
 	analogWriteESP32(warmLedPin, warmBrightness);
 
-	#if VERBOSE
+	if (prevMotorPWM != motorPWM || prevMotor2PWM != motor2PWM ||
+		prevCold != coldBrightness || prevWarm != warmBrightness) {
 		LOG("motorSpeed: ");
-		LOG(motorSpeed);
+		LOGI(motor2Speed);
+		LOG(" \\ 200 ");
+//		LOG("\t motor2Speed: ");
+//		LOGI(motor2Speed);
 
-		LOG("\t coldBrightness ");
-		LOG(coldBrightness);
+//		LOG("\t coldBrightness ");
+//		LOGI(coldBrightness);
 
-		LOG("\t - warmBrightness: ");
-		LOGL(warmBrightness);
-	#endif
+//		LOG("\t - warmBrightness: ");
+//		LOGLI(warmBrightness);
+	}
+
+	prevMotorPWM = motorPWM;
+	prevMotor2PWM = motor2PWM;
+	prevCold = coldBrightness;
+	prevWarm = warmBrightness;
+	delay(25);
 }
 
 void main::printPSI_I2O() {

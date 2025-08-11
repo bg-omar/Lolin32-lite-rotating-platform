@@ -17,7 +17,7 @@ void barometer::baroSetup() {
 		#if VERBOSE
 			LOGL("No valid BMP280 sensor, check wiring or try a different address!");
 			LOG("SensorID was: 0x");
-			LOGHexln(barometer::bmp->sensorID(), 16);
+//			LOGLH(barometer::bmp->sensorID(), 16);
 		#endif
 		main::Found_Barometer = false;
 		delete barometer::bmp;  // Clean up memory if initialization fails
@@ -67,3 +67,4 @@ void barometer::baroMeter() {
 		LOGL("Forced measurement failed!");
 	}
 }
+

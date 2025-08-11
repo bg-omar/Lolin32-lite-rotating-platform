@@ -13,6 +13,8 @@ public:
     static void baroMeter();
 
 	static Adafruit_BMP280 *bmp;
+
+	static void LOGHexln(uint8_t id, int i);
 };
 
 
