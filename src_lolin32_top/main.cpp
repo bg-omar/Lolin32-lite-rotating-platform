@@ -77,7 +77,7 @@ int warmPWM =  0; // Warm LED PWM value
 int motorSpeed = 0;
 int motor2Speed =  0;
 int prevSpeed, prevMs, prevDirection;
-int prevMotorPWM, prevMotor2PWM, prevCold, prevWarm;
+int prevMotorPWM, prevMotor2PWM, prevCold, prevWarm, previousFreq;
 
 int r = 255;
 int g = 0;
@@ -189,12 +189,41 @@ int speed = 0;
 
 void setup() {
     Serial.begin(115200);
-	pinMode(SERVO, PULLDOWN);
-	pinMode(SERVO2, PULLDOWN);
+	Wire.begin(OLED_SDA, OLED_SCL);
+
+	pinMode(SERVO, OUTPUT);          // MOSFET pin
+	digitalWrite(SERVO, LOW);        // Pull gate LOW
+	setupAnalogWritePin(SERVO, SERVO_CHANNEL, SERVO_FREQ, SERVO_RES);
+	analogWriteESP32(SERVO, 0);      // Make sure it's off
+
+
+	pinMode(SERVO2, OUTPUT);          // MOSFET pin
+	digitalWrite(SERVO2, LOW);        // Pull gate LOW
+	setupAnalogWritePin(SERVO2, SERVO_CHANNEL + 1, SERVO_FREQ, SERVO_RES);
+	analogWriteESP32(SERVO2, 0);      // Make sure it's off
+
 	LOG("Servo pin");
 	pinMode(led, OUTPUT);
 	digitalWrite(led, LOW);
-	Wire.begin(OLED_SDA, OLED_SCL);
+
+	pinMode(coldLedPin, OUTPUT);
+	pinMode(warmLedPin, OUTPUT);
+
+
+	LOGL("Stepper Motor ");
+	int i;
+	for(i=0;i<4;i++){
+		LOG("Stepper Pin: ");
+		LOGLI(motorPins[i]);
+		pinMode(motorPins[i], OUTPUT);
+	}
+
+
+
+
+
+
+
 
 	if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // 0x3C is common I2C address
 		Serial.println(F("SSD1306 allocation failed"));
@@ -232,25 +261,6 @@ void setup() {
 		barometer::baroSetup();
 		delay(500);
 	}
-
-    LOGL("Stepper Motor ");
-    int i;
-    for(i=0;i<4;i++){
-        LOG("Stepper Pin: ");
-        LOGLI(motorPins[i]);
-        pinMode(motorPins[i], OUTPUT);
-    }
-
-	pinMode(coldLedPin, PULLDOWN);
-	pinMode(warmLedPin, PULLDOWN);
-
-
-	setupAnalogWritePin(SERVO, SERVO_CHANNEL, SERVO_FREQ, SERVO_RES);
-	setupAnalogWritePin(SERVO2, SERVO_CHANNEL + 1, SERVO_FREQ, SERVO_RES);
-
-
-	pinMode(led, OUTPUT);
-	digitalWrite(led, 0);
 
 
     #if PS4CONTROLLER
@@ -293,20 +303,20 @@ void loop() {
 
 #if PS4CONTROLLER
     if (PS4.isConnected() ){
-		digitalWrite(led, HIGH);  // LED off when connected
+		digitalWrite(led, LOW);  // LED off when connected
 		// Reset blink logic so it starts fresh next time we disconnect
 		lastBlinkTime = millis();
 		ledState = true;
 
         if (PS4.Up()) motor2Speed += 1;
-        if (PS4.Right()) speed += 1;
+        if (PS4.Right()) motorSpeed += 10;
         if (PS4.Down()) motor2Speed -= 1;
-        if (PS4.Left()) speed -= 1;
+        if (PS4.Left()) motorSpeed -= 10;
 
-        if (PS4.Square()) motor2Speed -= 50 ;
-        if (PS4.Cross()) motor2Speed += 50 ;
+        if (PS4.Square()) motor2Speed = 100 ;
+        if (PS4.Cross()) motor2Speed = 50 ;
         if (PS4.Circle()) motor2Speed = 0 ;
-        if (PS4.Triangle()) motor2Speed = 200 ;
+        if (PS4.Triangle()) motor2Speed = 150 ;
 
         if (PS4.L1())        motor2Speed -= 10 ;
         if (PS4.R1())        motor2Speed += 10 ;
@@ -321,6 +331,19 @@ void loop() {
             LOGLI(PS4.Battery());
         }
 
+		if(PS4.L2Value() > 15 || PS4.R2Value() > 15) {
+			Serial.printf("%4d+%4d \r\n",
+						  (PS4.L2()) ? 4000 + PS4.L2Value() : 4000,
+						  (PS4.R2()) ? 5000 + PS4.R2Value() : 5000
+			);
+		}
+		int freq = map(PS4.LStickY(), 0, 255, 25, 5000); // 100 Hz to 5 kHz
+
+// Only update if changed
+		if (freq != previousFreq) {
+			ledcSetup(SERVO_CHANNEL, freq, SERVO_RES);
+			previousFreq = freq;
+		}
 #if THUMB_STICKS
         if (PS4.LStickY() <= -15 || PS4.LStickY() >= 15 || PS4.LStickX() <= -15 || PS4.LStickX() >= 15 ) {
                 Serial.printf("%4d+%4d \r\n",
@@ -335,12 +358,7 @@ void loop() {
                               (PS4.RStickY() <= -15 || PS4.RStickY() >= 15) ? 9127 + PS4.RStickY() : 9127
                 );
             }
-            if(PS4.L2Value() > 15 || PS4.R2Value() > 15) {
-                Serial.printf("%4d+%4d \r\n",
-                              (PS4.L2()) ? 4000 + PS4.L2Value() : 4000,
-                              (PS4.R2()) ? 5000 + PS4.R2Value() : 5000
-                );
-            }
+
 #elif BUTTONS
         if (PS4.L2()) { LOGL(4000 + PS4.L2Value());  }
             if (PS4.R2()) { LOGL(5000 + PS4.R2Value());  }
@@ -411,8 +429,8 @@ void loop() {
 	int warmBrightness = map(warmPWM, 0, 10, 0, 255);  // Positive speed dims warm LED
 
 
-	analogWrite(SERVO, motorPWM); // Set the motor speed using PWM
-	analogWrite(SERVO2, motor2PWM); // Set the motor speed using PWM
+	analogWriteESP32(SERVO, motorPWM); // Set the motor speed using PWM
+	analogWriteESP32(SERVO2, motor2PWM); // Set the motor speed using PWM
 	analogWriteESP32(coldLedPin, coldBrightness);
 	analogWriteESP32(warmLedPin, warmBrightness);
 
@@ -420,7 +438,7 @@ void loop() {
 		prevCold != coldBrightness || prevWarm != warmBrightness) {
 		LOG("motorSpeed: ");
 		LOGI(motor2Speed);
-		LOG(" \\ 200 ");
+		LOGL(" \\ 200 ");
 //		LOG("\t motor2Speed: ");
 //		LOGI(motor2Speed);
 
@@ -435,7 +453,7 @@ void loop() {
 	prevMotor2PWM = motor2PWM;
 	prevCold = coldBrightness;
 	prevWarm = warmBrightness;
-	delay(25);
+	delay(50);
 }
 
 void main::printPSI_I2O() {
