@@ -1,6 +1,11 @@
 //
 // Created by mr on 11/17/2023.
 //
+// Compass (HMC5883) Sensor
+// Orientation: Z-axis vertical, XY plane level/flat
+// - X and Y axes are horizontal (level)
+// - Z axis is vertical (pointing up/down)
+// Heading calculation uses X and Y components for horizontal direction
 
 #include "compass.h"
 
@@ -19,6 +24,7 @@ void compass::compassSetup() {
 	compass::mag = new Adafruit_HMC5883_Unified(12345);
 	if (!compass::mag->begin()) {
 		LOGL("HMC5883 Compass not found");
+		main::Found_Compass = false;
 		delay(500);
 	} else {
 		LOGL("Compass Found!");
@@ -37,6 +43,11 @@ void compass::showCompass(){
     unsigned char west[]  =  {0x00,0x00,0x00,0x3c,0x40,0x40,0x40,0x78,0x78,0x40,0x40,0x40,0x3c,0x00,0x00,0x00};
 
     double headingDegrees = readCompass();
+    if (isnan(headingDegrees)) {
+        LOGL("Compass read failed");
+        return;
+    }
+
 	LOG("Compass ");
     char buffer[20]; // Assuming a buffer size of 20 is sufficient
 
@@ -62,14 +73,19 @@ void compass::showCompass(){
 }
 
 double compass::readCompass(){
+    if (!mag || !main::Found_Compass) {
+        return NAN; // or a sentinel like -1
+    }
     sensors_event_t event; /// Get a new sensor event */
     mag->getEvent(&event);
 
 	/* Display the results (magnetic vector values are in micro-Tesla (uT)) */
+	// Note: X and Y are horizontal (level), Z is vertical
 	LOG("X: "); LOGD(((event.magnetic.x))); LOG("  ");
 	LOG("Y: "); LOGD(((event.magnetic.y))); LOG("  ");
 	LOG("Z: "); LOGD(((event.magnetic.z))); LOG("  ");LOGL("uT");
 
+	// Calculate heading using horizontal X and Y components (Z-axis vertical orientation)
 	double heading = atan2(event.magnetic.y, event.magnetic.x) + DECLINATION_ANGLE;
 
     if(heading < 0) {
