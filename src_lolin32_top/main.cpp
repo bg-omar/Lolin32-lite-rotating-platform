@@ -35,13 +35,14 @@ bool main::Found_Barometer = false;
 bool main::Found_AHT10 = false;
 bool main::Found_Display = false;
 bool main::Found_I2C = false;
+bool main::logCompass = false;
 
 bool main::motorSequence = false;
 int  main::motorSequenceIndex = 0;
-int  main::totalSequences = 10;
+int  main::totalSequences = 18;
 
-int  main::motorSpeed = 0;
 int  main::motorPWM = 0;
+int  main::motorBasePwmTarget = 0;
 int  main::motor2PWM = 0;
 int  main::motorTimeMultiplyer = 0;
 int  main::motorTimeFactor = 10;          // NEW
@@ -53,43 +54,59 @@ static const int minMotorPower = 0;
 
 // LEDC pin→channel map; initialize to -1 so unconfigured pins are safe
 static int pin2channel[64];
+static int pin2maxDuty[64];
 
 static void initPin2Channel() {
-  for (int i = 0; i < 64; ++i) pin2channel[i] = -1;
+  for (int i = 0; i < 64; ++i) {
+    pin2channel[i] = -1;
+    pin2maxDuty[i] = 255;
+  }
 }
 
 static void setupAnalogWritePin(int pin, int channel, int freq = 5000, int resolution = 8) {
   if (pin < 0 || pin >= 64) return;
   ledcSetup(channel, freq, resolution);
   pin2channel[pin] = channel;
+  pin2maxDuty[pin] = (1 << resolution) - 1;
   ledcAttachPin(pin, channel);
   ledcWrite(channel, 0);
 }
 
-// PWM config
+// Motor: 10-bit / 10kHz; status LEDs stay 8-bit
 static const int SERVO_CHANNEL = 0;   // 0..15
-static const int SERVO_FREQ    = 5000;
-static const int SERVO_RES     = 8;
+static const int MOTOR_PWM_FREQ  = 10000;
+static const int MOTOR_PWM_RES   = 10;
+static const int LED_PWM_FREQ    = 5000;
+static const int LED_PWM_RES     = 8;
+
+static int stickBoostToPwm(int boost) {
+  return map(boost, -MAX_BOOST, MAX_BOOST, -250, 250);
+}
+
+static void adjustMotorBasePwm(int delta) {
+  main::motorBasePwmTarget = constrain(main::motorBasePwmTarget + delta, 0, MOTOR_PWM_MAX);
+}
 
 static void initMotorOutputs() {
   initPin2Channel();
 
   pinMode(SERVO, OUTPUT);
   digitalWrite(SERVO, LOW);
-  setupAnalogWritePin(SERVO, SERVO_CHANNEL + 0, SERVO_FREQ, SERVO_RES);
+  setupAnalogWritePin(SERVO, SERVO_CHANNEL + 0, MOTOR_PWM_FREQ, MOTOR_PWM_RES);
   main::analogWriteESP32(SERVO, 0);
 
   pinMode(SERVO2, OUTPUT);
   digitalWrite(SERVO2, LOW);
-  setupAnalogWritePin(SERVO2, SERVO_CHANNEL + 1, SERVO_FREQ, SERVO_RES);
+  setupAnalogWritePin(SERVO2, SERVO_CHANNEL + 1, MOTOR_PWM_FREQ, MOTOR_PWM_RES);
   main::analogWriteESP32(SERVO2, 0);
 }
 
 void main::analogWriteESP32(int pin, int value) {
   if (pin < 0 || pin >= 64) return;
   int ch = pin2channel[pin];
-  if (ch < 0) return;                // not configured -> do nothing safely
-  value = constrain(value, 0, 255);
+  if (ch < 0) return;
+  int maxDuty = pin2maxDuty[pin];
+  value = constrain(value, 0, maxDuty);
   ledcWrite(ch, value);
 }
 
@@ -130,6 +147,12 @@ static void onDisConnect() {
   LOGL("Disconnected!");
 }
 
+static void logPs4Button(const char* name, bool pressed) {
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%s %s", name, pressed ? "pressed" : "released");
+  LOGL(buf);
+}
+
 // PS4 event callback
 static void notify() {
 #if EVENTS
@@ -150,45 +173,52 @@ static void notify() {
           opd = PS4.event.button_down.options,    opu = PS4.event.button_up.options,
           shd = PS4.event.button_down.share,      shu = PS4.event.button_up.share;
 
-  if      (sqd) main::motorSpeed = 100;
-  else if (squ) LOGI(3101);
-  else if (crd) main::motorSpeed = 50;
-  else if (cru) LOGI(3201);
-  else if (cid) main::motorSpeed = 0;
-  else if (ciu) LOGI(3301);
-  else if (trd) main::motorSpeed = 150;
-  else if (tru) LOGI(3401);
-  else if (upd) main::motorSpeed += 1;
-  else if (upu) LOGI(1101);
-  else if (rid) LOGLI(1210);
-  else if (riu) LOGI(1201);
-  else if (dod) main::motorSpeed -= 1;
-  else if (dou) LOGI(1301);
-  else if (led) LOGLI(1410);
-  else if (leu) LOGI(1401);
-  else if (l1d) main::motorSpeed -= 10;
-  else if (l1u) LOGI(2101);
-  else if (r1d) main::motorSpeed += 10;
-  else if (r1u) LOGI(2201);
-  else if (l3d) LOGLI(2310);
-  else if (l3u) LOGI(2301);
-  else if (r3d) LOGLI(2410);
-  else if (r3u) LOGI(2401);
-  else if (psd) LOGLI(2510);
-  else if (psu) LOGI(2501);
-  else if (tpd) LOGLI(2710);
-  else if (tpu) LOGI(2701);
-  else if (shd) LOGLI(2810);
-  else if (shu) LOGI(2801);
+  if      (sqd) { logPs4Button("Square", true);   main::motorBasePwmTarget = PRESET_PWM_SQUARE; }
+  else if (squ)   logPs4Button("Square", false);
+  else if (crd) { logPs4Button("Cross", true);    main::motorBasePwmTarget = PRESET_PWM_CROSS; }
+  else if (cru)   logPs4Button("Cross", false);
+  else if (cid) {
+    logPs4Button("Circle", true);
+    main::motorBasePwmTarget = 0;
+    motorPowerBoost = 0;
+    main::motorPWM = 0;
+  }
+  else if (ciu)   logPs4Button("Circle", false);
+  else if (trd) { logPs4Button("Triangle", true); main::motorBasePwmTarget = PRESET_PWM_TRIANGLE; }
+  else if (tru)   logPs4Button("Triangle", false);
+  else if (upd) { logPs4Button("D-pad Up", true);    adjustMotorBasePwm(1); }
+  else if (upu)   logPs4Button("D-pad Up", false);
+  else if (rid)   logPs4Button("D-pad Right", true);
+  else if (riu)   logPs4Button("D-pad Right", false);
+  else if (dod) { logPs4Button("D-pad Down", true);  adjustMotorBasePwm(-1); }
+  else if (dou)   logPs4Button("D-pad Down", false);
+  else if (led)   logPs4Button("D-pad Left", true);
+  else if (leu)   logPs4Button("D-pad Left", false);
+  else if (l1d) { logPs4Button("L1", true);  adjustMotorBasePwm(-10); }
+  else if (l1u)   logPs4Button("L1", false);
+  else if (r1d) { logPs4Button("R1", true);  adjustMotorBasePwm(10); }
+  else if (r1u)   logPs4Button("R1", false);
+  else if (l3d)   logPs4Button("L3", true);
+  else if (l3u)   logPs4Button("L3", false);
+  else if (r3d)   logPs4Button("R3", true);
+  else if (r3u)   logPs4Button("R3", false);
+  else if (psd)   logPs4Button("PS", true);
+  else if (psu)   logPs4Button("PS", false);
+  else if (tpd)   logPs4Button("Touchpad", true);
+  else if (tpu)   logPs4Button("Touchpad", false);
+  else if (shd) {
+    logPs4Button("Share", true);
+    main::logCompass = !main::logCompass;
+    LOGL(main::logCompass ? "Compass log ON" : "Compass log OFF");
+  }
+  else if (shu)   logPs4Button("Share", false);
   else if (opd) {
+    logPs4Button("Options", true);
     main::motorSequence = !main::motorSequence;
-    main::motorSequenceEpoch++; // NEW: reset sequence statics on toggle
-    if (main::motorSequence) LOGL("Motor sequence started");
-    else                     LOGL("Motor sequence stopped");
+    main::motorSequenceEpoch++;
+    LOGL(main::motorSequence ? "Motor sequence started" : "Motor sequence stopped");
   }
-  else if (opu) {
-    LOGI(2901);
-  }
+  else if (opu)   logPs4Button("Options", false);
 #endif
 }
 #endif // PS4CONTROLLER
@@ -229,19 +259,18 @@ void setup() {
 
   main::scan_PSI_I2C();
 
-  // Initialize each sensor independently - each handles its own failure gracefully
-  // This allows the script to continue even if some I2C devices are not connected
-  delay(500);
-  oled91::oled91Setup();
-  delay(500);
-  gyroscope::gyroSetup();
-  delay(500);
-  compass::compassSetup();
-  delay(500);
-  aht10::aht10Setup();
-  delay(500);
-  bmp280::bmp280Setup();
-  delay(500);
+  if (main::Found_I2C) {
+    oled91::oled91Setup();
+    delay(200);
+    gyroscope::gyroSetup();
+    delay(200);
+    compass::compassSetup();
+    delay(200);
+    aht10::aht10Setup();
+    delay(200);
+    bmp280::bmp280Setup();
+    delay(200);
+  }
 
   LOG("Servo pin: "); LOGLI(SERVO);
   LOG("Servo pin 2: "); LOGLI(SERVO2);
@@ -261,8 +290,8 @@ void setup() {
   } else {
     pinMode(coldLedPin, OUTPUT);
     pinMode(warmLedPin, OUTPUT);
-    setupAnalogWritePin(coldLedPin, SERVO_CHANNEL + 2, SERVO_FREQ, SERVO_RES);
-    setupAnalogWritePin(warmLedPin, SERVO_CHANNEL + 3, SERVO_FREQ, SERVO_RES);
+    setupAnalogWritePin(coldLedPin, SERVO_CHANNEL + 2, LED_PWM_FREQ, LED_PWM_RES);
+    setupAnalogWritePin(warmLedPin, SERVO_CHANNEL + 3, LED_PWM_FREQ, LED_PWM_RES);
     main::analogWriteESP32(coldLedPin, 0);
     main::analogWriteESP32(warmLedPin, 0);
     g_ledPwmEnabled = true;
@@ -315,7 +344,7 @@ void loop() {
     
     // Each sensor function checks its own Found_X flag internally
     // This allows the script to continue even if I2C devices are not connected
-    if (main::Found_Compass && (now - lastCompassMs) >= 500) {
+    if (main::Found_Compass && main::logCompass && (now - lastCompassMs) >= 500) {
         compass::showCompass();
         lastCompassMs = now;
     }
@@ -363,10 +392,10 @@ void loop() {
     lastBlinkTime = millis();
     ledState = true;
 
-    if (PS4.PSButton()) send("2500");
+    if (PS4.PSButton()) LOGL("PS button pressed");
     if (PS4.Touchpad()) {
       Serial.print("Battery Level: ");
-      LOGLI(PS4.Battery());
+      Serial.println(PS4.Battery());
     }
 
     unsigned long now = millis();
@@ -378,7 +407,7 @@ void loop() {
       if (main::motorSequenceIndex < 0) main::motorSequenceIndex += main::totalSequences;
       main::motorSequenceEpoch++;
       LOG("Motor sequence index: "); LOGI(main::motorSequenceIndex);
-      LOG(" - Total sequences: "); LOGLI(main::totalSequences);
+      LOG(" - Total sequences: "); Serial.println(main::totalSequences);
     }
 
     if (PS4.R2Value() > 15 && (now - lastSeqChangeMs) > SEQ_CHANGE_COOLDOWN_MS) {
@@ -386,7 +415,7 @@ void loop() {
       main::motorSequenceIndex = (main::motorSequenceIndex + 1) % main::totalSequences;
       main::motorSequenceEpoch++;
       LOG("Motor sequence index: "); LOGI(main::motorSequenceIndex);
-      LOG(" - Total sequences: "); LOGLI(main::totalSequences);
+      LOG(" - Total sequences: "); Serial.println(main::totalSequences);
     }
 
 #if THUMB_STICKS
@@ -395,10 +424,10 @@ void loop() {
     int rxy = PS4.RStickY();
     int rxx = PS4.RStickX();
 
-    // BOOST from Y
+    // BOOST from Y — right stick first (boost pulse), then left
     int rawBoost = 0;
-    if (abs(lxy) > STICK_DEADZONE) rawBoost = lxy;
-    else if (abs(rxy) > STICK_DEADZONE) rawBoost = rxy;
+    if (abs(rxy) > STICK_DEADZONE) rawBoost = rxy;
+    else if (abs(lxy) > STICK_DEADZONE) rawBoost = lxy;
 
     long mappedBoost = map(rawBoost, -MAX_STICK_RAW, MAX_STICK_RAW, -MAX_BOOST, MAX_BOOST);
     motorPowerBoost = (int)constrain(mappedBoost, -MAX_BOOST, MAX_BOOST);
@@ -426,6 +455,7 @@ void loop() {
     PS4.sendToController();
     delay(25);
   } else {
+    motorPowerBoost = 0;
     unsigned long currentMillis = millis();
     if (currentMillis - lastBlinkTime >= blinkInterval) {
       lastBlinkTime = currentMillis;
@@ -456,35 +486,56 @@ void loop() {
   prevMs = ms;
   prevDirection = direction;
 
-  // Motor PWM computation (preserve your logic, just clamp correctly)
-  int motorSpeedPWM = constrain(main::motorSpeed + motorPowerBoost, 0, 250);
-
-  // Keep your map but prevent overflow >255
-  int targetPWM = map(motorSpeedPWM, 0, 200, 0, 255);
-  targetPWM = constrain(targetPWM, 0, 255);
-  
-  // Soft-start/ramp to prevent sudden current spikes that cause voltage drops
-  // Gradually change PWM instead of instant changes to reduce reset risk
-  static int lastTargetPWM = 0;
+  // Base PWM ramps; stick boost instant on top (instant release too).
+  static int rampedBasePWM = 0;
   static unsigned long lastPWMChangeMs = 0;
-  const int PWM_RAMP_RATE = 5;  // Max change per 10ms (adjust for smoother/slower)
-  const unsigned long PWM_RAMP_INTERVAL = 10;  // 10ms between ramp steps
-  
+  const int PWM_RAMP_RATE_SLOW = 2;
+  const int PWM_RAMP_CRAWL_MAX = 180;
+  const int PWM_RAMP_CRAWL_STEP = 2;
+  const unsigned long PWM_RAMP_CRAWL_INTERVAL = 35;
+  const unsigned long PWM_RAMP_INTERVAL_FAST = 10;
+  const unsigned long PWM_RAMP_INTERVAL_SLOW = 40;
+
+  int baseTargetPWM = constrain(main::motorBasePwmTarget, 0, MOTOR_PWM_MAX);
+  int boostOffsetPWM = stickBoostToPwm(motorPowerBoost);
+  int fullTargetPWM = constrain(baseTargetPWM + boostOffsetPWM, 0, MOTOR_PWM_MAX);
+
   unsigned long nowPWM = millis();
-  if (nowPWM - lastPWMChangeMs >= PWM_RAMP_INTERVAL) {
-    if (targetPWM > main::motorPWM) {
-      main::motorPWM = min(main::motorPWM + PWM_RAMP_RATE, targetPWM);
-    } else if (targetPWM < main::motorPWM) {
-      main::motorPWM = max(main::motorPWM - PWM_RAMP_RATE, targetPWM);
+  if (fullTargetPWM == 0 && baseTargetPWM == 0) {
+    rampedBasePWM = 0;
+    main::motorPWM = 0;
+  } else {
+    auto inCrawlZone = [](int pwm) { return pwm > 0 && pwm < PWM_RAMP_CRAWL_MAX; };
+
+    if (baseTargetPWM < rampedBasePWM) {
+      if (baseTargetPWM == 0 || !inCrawlZone(rampedBasePWM)) {
+        rampedBasePWM = baseTargetPWM;
+      } else if (nowPWM - lastPWMChangeMs >= PWM_RAMP_CRAWL_INTERVAL) {
+        rampedBasePWM = max(rampedBasePWM - PWM_RAMP_CRAWL_STEP, baseTargetPWM);
+        lastPWMChangeMs = nowPWM;
+      }
+    } else if (baseTargetPWM > rampedBasePWM) {
+      int rampSpeed = max(rampedBasePWM, baseTargetPWM);
+      int rampRate;
+      unsigned long rampInterval;
+
+      if (rampSpeed < PWM_RAMP_CRAWL_MAX) {
+        rampRate = PWM_RAMP_CRAWL_STEP;
+        rampInterval = PWM_RAMP_CRAWL_INTERVAL;
+      } else {
+        rampRate = map(rampSpeed, PWM_RAMP_CRAWL_MAX, MOTOR_PWM_MAX, 4, PWM_RAMP_RATE_SLOW);
+        rampRate = max(1, rampRate);
+        rampInterval = map(rampSpeed, PWM_RAMP_CRAWL_MAX, MOTOR_PWM_MAX, PWM_RAMP_INTERVAL_FAST, PWM_RAMP_INTERVAL_SLOW);
+      }
+
+      if (nowPWM - lastPWMChangeMs >= rampInterval) {
+        rampedBasePWM = min(rampedBasePWM + rampRate, baseTargetPWM);
+        lastPWMChangeMs = nowPWM;
+      }
     }
-    lastPWMChangeMs = nowPWM;
+
+    main::motorPWM = constrain(rampedBasePWM + boostOffsetPWM, 0, MOTOR_PWM_MAX);
   }
-  
-  // If target changed significantly, update immediately (for safety/stopping)
-  if (abs(targetPWM - lastTargetPWM) > 50) {
-    main::motorPWM = targetPWM;  // Allow fast changes for large differences
-  }
-  lastTargetPWM = targetPWM;
 
   // LEDs (only if enabled and configured)
   int coldPWM = 0, warmPWM = 0;
@@ -497,7 +548,7 @@ void loop() {
   // Run motor pattern if enabled; otherwise write steady PWM to both pins
   motor::sequence();
   if (!main::motorSequence) {
-    motor::write((uint8_t)main::motorPWM);
+    motor::write(main::motorPWM);
   }
 
   if (g_ledPwmEnabled) {
@@ -507,9 +558,10 @@ void loop() {
 
   if (prevMotorPWM != main::motorPWM || prevMotor2PWM != main::motor2PWM ||
       prevCold != coldBrightness || prevWarm != warmBrightness) {
-    LOG("motorPWM: "); LOGI(main::motorPWM); LOG(" \\ 255 ");
-    LOG("\tBoost: "); LOGI(motorPowerBoost);
-    LOG("\tTimeMult: "); LOGLI(main::motorTimeMultiplyer);
+    Serial.print("motorPWM: "); Serial.print(main::motorPWM);
+    Serial.print(" / "); Serial.print(MOTOR_PWM_MAX);
+    Serial.print("\tBoost: "); Serial.print(motorPowerBoost);
+    Serial.print("\tTimeMult: "); Serial.println(main::motorTimeMultiplyer);
   }
 
   prevMotorPWM = main::motorPWM;
@@ -532,7 +584,9 @@ void main::scan_PSI_I2C() {
 
 #if USE_I2C_SCANNER
   I2Cscanner::scan();
-  delay(500);
+#else
+  Wire.begin(I2C_SDA, I2C_SCL);
+  main::Found_I2C = true;
 #endif
 }
 

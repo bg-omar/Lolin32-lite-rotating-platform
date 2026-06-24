@@ -14,6 +14,7 @@ Adafruit_SSD1306* oled91::oled = nullptr;
 bool oled91::initialized = false;
 
 void oled91::oled91Setup() {
+    if (!main::Found_I2C) return;
     // 0.91" OLED is typically 128x32 pixels
     // Common I2C addresses: 0x3C (default) or 0x3D
     uint8_t addresses[] = {0x3C, 0x3D};

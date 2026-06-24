@@ -13,6 +13,7 @@ float bmp280::altitude = 0.0;
 bool bmp280::hasHumidity = false;
 
 void bmp280::bmp280Setup() {
+    if (!main::Found_I2C) return;
     // Try to initialize at common I2C addresses (0x76 is default, 0x77 is alternative)
     uint8_t addresses[] = {0x76, 0x77};
     bool found = false;

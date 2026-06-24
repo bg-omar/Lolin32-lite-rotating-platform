@@ -21,6 +21,7 @@ Adafruit_HMC5883_Unified* compass::mag = nullptr;
 float DECLINATION_ANGLE = 0.035;
 
 void compass::compassSetup() {
+	if (!main::Found_I2C) return;
 	compass::mag = new Adafruit_HMC5883_Unified(12345);
 	if (!compass::mag->begin()) {
 		LOGL("HMC5883 Compass not found");
@@ -37,10 +38,7 @@ void compass::compassSetup() {
 }
 
 void compass::showCompass(){
-    unsigned char north[] =  {0x00,0x00,0x00,0x00,0x00,0x7e,0x04,0x08,0x10,0x20,0x7e,0x00,0x00,0x00,0x00,0x00};
-    unsigned char east[]  =  {0x00,0x00,0x00,0x00,0x00,0xfe,0x92,0x92,0x92,0x92,0x82,0x00,0x00,0x00,0x00,0x00};
-    unsigned char south[] =  {0x00,0x00,0x00,0x00,0x00,0x9e,0x92,0x92,0x92,0x92,0xf2,0x00,0x00,0x00,0x00,0x00};
-    unsigned char west[]  =  {0x00,0x00,0x00,0x3c,0x40,0x40,0x40,0x78,0x78,0x40,0x40,0x40,0x3c,0x00,0x00,0x00};
+    if (!main::logCompass) return;
 
     double headingDegrees = readCompass();
     if (isnan(headingDegrees)) {
@@ -49,9 +47,8 @@ void compass::showCompass(){
     }
 
 	LOG("Compass ");
-    char buffer[20]; // Assuming a buffer size of 20 is sufficient
+    char buffer[20];
 
-    // Convert double to char*
     snprintf(buffer, sizeof(buffer), "%f", headingDegrees);
 
 	LOG(buffer);
@@ -70,6 +67,7 @@ void compass::showCompass(){
     if (headingDegrees >= 315 && headingDegrees < 360){
 		LOG("  North ");
     }
+    LOGL("");
 }
 
 double compass::readCompass(){
@@ -79,11 +77,12 @@ double compass::readCompass(){
     sensors_event_t event; /// Get a new sensor event */
     mag->getEvent(&event);
 
-	/* Display the results (magnetic vector values are in micro-Tesla (uT)) */
-	// Note: X and Y are horizontal (level), Z is vertical
-	LOG("X: "); LOGD(((event.magnetic.x))); LOG("  ");
-	LOG("Y: "); LOGD(((event.magnetic.y))); LOG("  ");
-	LOG("Z: "); LOGD(((event.magnetic.z))); LOG("  ");LOGL("uT");
+	/* magnetic vector values are in micro-Tesla (uT) — serial log only when enabled */
+	if (main::logCompass) {
+		LOG("X: "); LOGD(((event.magnetic.x))); LOG("  ");
+		LOG("Y: "); LOGD(((event.magnetic.y))); LOG("  ");
+		LOG("Z: "); LOGD(((event.magnetic.z))); LOG("  "); LOGL("uT");
+	}
 
 	// Calculate heading using horizontal X and Y components (Z-axis vertical orientation)
 	double heading = atan2(event.magnetic.y, event.magnetic.x) + DECLINATION_ANGLE;
@@ -95,7 +94,9 @@ double compass::readCompass(){
         heading -= 2 * PI;
     }
     double headingDegrees = (heading * 180/M_PI) - 90;
-	LOG("Heading (degrees): "); LOGLD(((headingDegrees)));
+	if (main::logCompass) {
+		LOG("Heading (degrees): "); LOGLD(((headingDegrees)));
+	}
     return (headingDegrees < 0) ? 360 + headingDegrees : headingDegrees;
 }
 

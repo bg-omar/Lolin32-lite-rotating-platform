@@ -195,6 +195,7 @@ void gyroscope::gyroCalibrate_sensor() {
 }
 
 void gyroscope::gyroSetup() {
+    if (!main::Found_I2C) return;
     // Try to initialize at common I2C addresses (0x68 is default, 0x69 is alternative)
     uint8_t addresses[] = {0x68, 0x69};
     bool found = false;

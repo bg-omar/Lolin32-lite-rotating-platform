@@ -13,6 +13,71 @@ static inline bool epochChanged(uint32_t &lastEpoch) {
   return false;
 }
 
+#ifndef MOTOR_TEST_LOG
+#define MOTOR_TEST_LOG 1
+#endif
+
+static void logMotorTestHeaderOnce() {
+#if MOTOR_TEST_LOG
+  static bool printed = false;
+  if (!printed) {
+    Serial.println("MOTOR_TEST_HEADER,ms,epoch,seq_index,test,event,phase,elapsed_ms,pwm,base_pwm,pulse_pwm");
+    printed = true;
+  }
+#endif
+}
+
+static void logMotorTestEvent(
+  const char* testName,
+  const char* eventName,
+  const char* phaseName,
+  unsigned long elapsedMs,
+  int pwm,
+  int basePwm,
+  int pulsePwm
+) {
+#if MOTOR_TEST_LOG
+  logMotorTestHeaderOnce();
+
+  Serial.print("MOTOR_TEST,");
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(main::motorSequenceEpoch);
+  Serial.print(",");
+  Serial.print(main::motorSequenceIndex);
+  Serial.print(",");
+  Serial.print(testName);
+  Serial.print(",");
+  Serial.print(eventName);
+  Serial.print(",");
+  Serial.print(phaseName);
+  Serial.print(",");
+  Serial.print(elapsedMs);
+  Serial.print(",");
+  Serial.print(pwm);
+  Serial.print(",");
+  Serial.print(basePwm);
+  Serial.print(",");
+  Serial.println(pulsePwm);
+#endif
+}
+
+static int testBasePwm() {
+  // If controller base PWM is 0, use a conservative fallback.
+  // For 10-bit PWM this is ~204; for 8-bit this is ~51.
+  int base = main::motorPWM;
+  if (base <= 0) base = MOTOR_PWM_MAX / 5;
+  return constrain(base, 0, MOTOR_PWM_MAX);
+}
+
+static int testPulseUpPwm(int basePwm, int deltaPwm) {
+  return constrain(basePwm + deltaPwm, 0, MOTOR_PWM_MAX);
+}
+
+static int testPulseDownPwm(int basePwm, int deltaPwm) {
+  return constrain(basePwm - deltaPwm, 0, MOTOR_PWM_MAX);
+}
+
 void motor::sequence() {
   if (main::motorSequence) {
     if (main::motorSequenceIndex < 0 || main::motorSequenceIndex >= main::totalSequences) {
@@ -35,8 +100,19 @@ void motor::sequence() {
         motor::customSequence(customPattern, 4);
         break;
       }
+
+      // Hydrodynamic memory / vorticity-column tests
+      case 10: motor::controlPulseNoPreSpin(); break;
+      case 11: motor::preconditionPulseTest10s(); break;
+      case 12: motor::preconditionPulseTest30s(); break;
+      case 13: motor::preconditionPulseTest60s(); break;
+      case 14: motor::preconditionPulseTest120s(); break;
+      case 15: motor::steadyRotorOnlyTest60s(); break;
+      case 16: motor::memoryDecayAfterStopTest(); break;
+      case 17: motor::negativePulseAfterPreconditionTest(); break;
+
       default:
-        motor::write((uint8_t)0);
+        motor::write(0);
         break;
     }
   }
@@ -54,12 +130,12 @@ void motor::randomVibrationSequence(int durationMs) {
     lastUpdate = millis();
     isOn = false;
     currentPower = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor; // clamped [1..20]
   if (millis() - sequenceStart >= (unsigned long)durationMs * (unsigned long)tf) {
-    motor::write((uint8_t)0);
+    motor::write(0);
     return;
   }
 
@@ -69,12 +145,12 @@ void motor::randomVibrationSequence(int durationMs) {
     lastUpdate = millis();
 
     if (isOn) {
-      motor::write((uint8_t)0);
+      motor::write(0);
       isOn = false;
     } else {
       currentPower = random(main::motorPWM / 2, main::motorPWM);
-      currentPower = constrain(currentPower, 0, 255);
-      motor::write((uint8_t)currentPower);
+      currentPower = constrain(currentPower, 0, MOTOR_PWM_MAX);
+      motor::write(currentPower);
       isOn = true;
 
       int pattern = random(0, 3);
@@ -95,7 +171,7 @@ void motor::shortPulse() {
   if (epochChanged(lastEpoch)) {
     lastUpdate = millis();
     isOn = false;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -104,7 +180,7 @@ void motor::shortPulse() {
   if (millis() - lastUpdate >= dt) {
     lastUpdate = millis();
     isOn = !isOn;
-    motor::write((uint8_t)(isOn ? main::motorPWM : 0));
+    motor::write(isOn ? main::motorPWM : 0);
   }
 }
 
@@ -116,7 +192,7 @@ void motor::longPulse() {
   if (epochChanged(lastEpoch)) {
     lastUpdate = millis();
     isOn = false;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -125,7 +201,7 @@ void motor::longPulse() {
   if (millis() - lastUpdate >= dt) {
     lastUpdate = millis();
     isOn = !isOn;
-    motor::write((uint8_t)(isOn ? main::motorPWM : 0));
+    motor::write(isOn ? main::motorPWM : 0);
   }
 }
 
@@ -141,7 +217,7 @@ void motor::alternatingPulse() {
     highPower = true;
     pulseCount = 0;
     totalPulses = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -151,12 +227,12 @@ void motor::alternatingPulse() {
     lastUpdate = millis();
 
     if (pulseCount < totalPulses) {
-      uint8_t duty = (uint8_t)(highPower ? main::motorPWM : (main::motorPWM / 2));
+      int duty = highPower ? main::motorPWM : (main::motorPWM / 2);
       motor::write(duty);
       highPower = !highPower;
       if (!highPower) pulseCount++;
     } else {
-      motor::write((uint8_t)0);
+      motor::write(0);
       pulseCount = 0;
       totalPulses = random(3 * tf, 6 * tf);
     }
@@ -171,14 +247,14 @@ void motor::customSequence(int pattern[], int size) {
   if (epochChanged(lastEpoch)) {
     index = 0;
     lastUpdate = millis();
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   if (size <= 0) return;
 
   if (millis() - lastUpdate >= (unsigned long)pattern[index]) {
     lastUpdate = millis();
-    motor::write((uint8_t)(((index % 2) == 0) ? main::motorPWM : 0));
+    motor::write(((index % 2) == 0) ? main::motorPWM : 0);
     index = (index + 1) % size;
   }
 }
@@ -193,7 +269,7 @@ void motor::rotateWithPower() {
     lastUpdate = millis();
     speed = 0;
     increasing = true;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -202,14 +278,14 @@ void motor::rotateWithPower() {
     lastUpdate = millis();
 
     if (increasing) {
-      speed += 5;
+      speed += 20;
       if (speed >= main::motorPWM) increasing = false;
     } else {
-      speed -= 5;
+      speed -= 20;
       if (speed <= 0) increasing = true;
     }
-    speed = constrain(speed, 0, 255);
-    motor::write((uint8_t)speed);
+    speed = constrain(speed, 0, MOTOR_PWM_MAX);
+    motor::write(speed);
   }
 }
 
@@ -223,7 +299,7 @@ void motor::pulsateWithPower() {
     lastUpdate = millis();
     isOn = false;
     pulseCount = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -234,10 +310,10 @@ void motor::pulsateWithPower() {
     isOn = !isOn;
 
     if (isOn) {
-      motor::write((uint8_t)main::motorPWM);
+      motor::write(main::motorPWM);
       pulseCount++;
     } else {
-      motor::write((uint8_t)0);
+      motor::write(0);
     }
 
     if (pulseCount >= 5) pulseCount = 0;
@@ -252,7 +328,7 @@ void motor::quickBurstWithPower() {
   if (epochChanged(lastEpoch)) {
     lastUpdate = millis();
     state = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -261,10 +337,10 @@ void motor::quickBurstWithPower() {
   if (millis() - lastUpdate >= dt) {
     lastUpdate = millis();
     if (state == 0) {
-      motor::write((uint8_t)main::motorPWM);
+      motor::write(main::motorPWM);
       state = 1;
     } else {
-      motor::write((uint8_t)0);
+      motor::write(0);
       state = 0;
     }
   }
@@ -282,7 +358,7 @@ void motor::rampPulseWithPower() {
     speed = 0;
     state = 0;
     holdStart = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -291,7 +367,7 @@ void motor::rampPulseWithPower() {
     lastUpdate = millis();
 
     if (state == 0) {
-      speed += 5;
+      speed += 20;
       if (speed >= main::motorPWM) {
         speed = main::motorPWM;
         state = 1;
@@ -302,15 +378,15 @@ void motor::rampPulseWithPower() {
         state = 2;
       }
     } else if (state == 2) {
-      speed -= 5;
+      speed -= 20;
       if (speed <= 0) {
         speed = 0;
         state = 0;
       }
     }
 
-    speed = constrain(speed, 0, 255);
-    motor::write((uint8_t)speed);
+    speed = constrain(speed, 0, MOTOR_PWM_MAX);
+    motor::write(speed);
   }
 }
 
@@ -324,7 +400,7 @@ void motor::alternatingPulseWithPower() {
     lastUpdate = millis();
     highPower = true;
     pulseCount = 0;
-    motor::write((uint8_t)0);
+    motor::write(0);
   }
 
   const int tf = main::motorTimeFactor;
@@ -333,13 +409,354 @@ void motor::alternatingPulseWithPower() {
     lastUpdate = millis();
 
     if (pulseCount < 5) {
-      uint8_t duty = (uint8_t)(highPower ? main::motorPWM : (main::motorPWM / 2));
+      int duty = highPower ? main::motorPWM : (main::motorPWM / 2);
       motor::write(duty);
       highPower = !highPower;
       if (!highPower) pulseCount++;
     } else {
-      motor::write((uint8_t)0);
+      motor::write(0);
       pulseCount = 0;
     }
   }
+}
+
+void motor::runPreconditionThenPulse(
+  const char* testName,
+  unsigned long preMs,
+  unsigned long pulseMs,
+  unsigned long postMs,
+  int deltaPwm,
+  bool negativePulse
+) {
+  static uint32_t lastEpoch = 0;
+  static unsigned long startMs = 0;
+  static unsigned long lastBeatMs = 0;
+  static int phase = -1;
+  static int basePwm = 0;
+  static int pulsePwm = 0;
+
+  if (epochChanged(lastEpoch)) {
+    startMs = millis();
+    lastBeatMs = 0;
+    phase = -1;
+
+    basePwm = testBasePwm();
+    pulsePwm = negativePulse
+      ? testPulseDownPwm(basePwm, deltaPwm)
+      : testPulseUpPwm(basePwm, deltaPwm);
+
+    motor::write(0);
+    logMotorTestEvent(testName, "RESET", "INIT", 0, 0, basePwm, pulsePwm);
+  }
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - startMs;
+
+  int newPhase;
+  const char* phaseName;
+  int pwm;
+
+  if (elapsed < preMs) {
+    newPhase = 0;
+    phaseName = "PRECONDITION_BASE_ROTATION";
+    pwm = basePwm;
+  } else if (elapsed < preMs + pulseMs) {
+    newPhase = 1;
+    phaseName = negativePulse ? "NEGATIVE_PULSE" : "POSITIVE_PULSE";
+    pwm = pulsePwm;
+  } else if (elapsed < preMs + pulseMs + postMs) {
+    newPhase = 2;
+    phaseName = "POST_BASE_ROTATION";
+    pwm = basePwm;
+  } else {
+    newPhase = 3;
+    phaseName = "DONE_HOLD_BASE";
+    pwm = basePwm;
+  }
+
+  if (newPhase != phase) {
+    phase = newPhase;
+    logMotorTestEvent(testName, "PHASE", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  if (now - lastBeatMs >= 1000) {
+    lastBeatMs = now;
+    logMotorTestEvent(testName, "BEAT", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  motor::write(pwm);
+}
+
+void motor::runNoPreconditionPulseControl(
+  const char* testName,
+  unsigned long idleMs,
+  unsigned long pulseMs,
+  unsigned long postMs,
+  int deltaPwm
+) {
+  static uint32_t lastEpoch = 0;
+  static unsigned long startMs = 0;
+  static unsigned long lastBeatMs = 0;
+  static int phase = -1;
+  static int basePwm = 0;
+  static int pulsePwm = 0;
+
+  if (epochChanged(lastEpoch)) {
+    startMs = millis();
+    lastBeatMs = 0;
+    phase = -1;
+
+    basePwm = testBasePwm();
+    pulsePwm = testPulseUpPwm(basePwm, deltaPwm);
+
+    motor::write(0);
+    logMotorTestEvent(testName, "RESET", "INIT", 0, 0, basePwm, pulsePwm);
+  }
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - startMs;
+
+  int newPhase;
+  const char* phaseName;
+  int pwm;
+
+  if (elapsed < idleMs) {
+    newPhase = 0;
+    phaseName = "NO_PRESPIN_IDLE";
+    pwm = 0;
+  } else if (elapsed < idleMs + pulseMs) {
+    newPhase = 1;
+    phaseName = "PULSE_WITHOUT_PRECONDITION";
+    pwm = pulsePwm;
+  } else if (elapsed < idleMs + pulseMs + postMs) {
+    newPhase = 2;
+    phaseName = "POST_OFF";
+    pwm = 0;
+  } else {
+    newPhase = 3;
+    phaseName = "DONE_OFF";
+    pwm = 0;
+  }
+
+  if (newPhase != phase) {
+    phase = newPhase;
+    logMotorTestEvent(testName, "PHASE", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  if (now - lastBeatMs >= 1000) {
+    lastBeatMs = now;
+    logMotorTestEvent(testName, "BEAT", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  motor::write(pwm);
+}
+
+void motor::runSteadyOnlyTest(
+  const char* testName,
+  unsigned long holdMs
+) {
+  static uint32_t lastEpoch = 0;
+  static unsigned long startMs = 0;
+  static unsigned long lastBeatMs = 0;
+  static int phase = -1;
+  static int basePwm = 0;
+
+  if (epochChanged(lastEpoch)) {
+    startMs = millis();
+    lastBeatMs = 0;
+    phase = -1;
+    basePwm = testBasePwm();
+
+    motor::write(0);
+    logMotorTestEvent(testName, "RESET", "INIT", 0, 0, basePwm, basePwm);
+  }
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - startMs;
+
+  int newPhase;
+  const char* phaseName;
+  int pwm;
+
+  if (elapsed < holdMs) {
+    newPhase = 0;
+    phaseName = "STEADY_BASE_ONLY_NO_PULSE";
+    pwm = basePwm;
+  } else {
+    newPhase = 1;
+    phaseName = "DONE_HOLD_BASE";
+    pwm = basePwm;
+  }
+
+  if (newPhase != phase) {
+    phase = newPhase;
+    logMotorTestEvent(testName, "PHASE", phaseName, elapsed, pwm, basePwm, basePwm);
+  }
+
+  if (now - lastBeatMs >= 1000) {
+    lastBeatMs = now;
+    logMotorTestEvent(testName, "BEAT", phaseName, elapsed, pwm, basePwm, basePwm);
+  }
+
+  motor::write(pwm);
+}
+
+void motor::runMemoryDecayAfterStop(
+  const char* testName,
+  unsigned long preMs,
+  unsigned long stopMs,
+  unsigned long pulseMs,
+  unsigned long postMs,
+  int deltaPwm
+) {
+  static uint32_t lastEpoch = 0;
+  static unsigned long startMs = 0;
+  static unsigned long lastBeatMs = 0;
+  static int phase = -1;
+  static int basePwm = 0;
+  static int pulsePwm = 0;
+
+  if (epochChanged(lastEpoch)) {
+    startMs = millis();
+    lastBeatMs = 0;
+    phase = -1;
+
+    basePwm = testBasePwm();
+    pulsePwm = testPulseUpPwm(basePwm, deltaPwm);
+
+    motor::write(0);
+    logMotorTestEvent(testName, "RESET", "INIT", 0, 0, basePwm, pulsePwm);
+  }
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - startMs;
+
+  int newPhase;
+  const char* phaseName;
+  int pwm;
+
+  if (elapsed < preMs) {
+    newPhase = 0;
+    phaseName = "PRECONDITION_BASE_ROTATION";
+    pwm = basePwm;
+  } else if (elapsed < preMs + stopMs) {
+    newPhase = 1;
+    phaseName = "STOP_DECAY_WINDOW";
+    pwm = 0;
+  } else if (elapsed < preMs + stopMs + pulseMs) {
+    newPhase = 2;
+    phaseName = "PULSE_AFTER_STOP";
+    pwm = pulsePwm;
+  } else if (elapsed < preMs + stopMs + pulseMs + postMs) {
+    newPhase = 3;
+    phaseName = "POST_BASE_ROTATION";
+    pwm = basePwm;
+  } else {
+    newPhase = 4;
+    phaseName = "DONE_HOLD_BASE";
+    pwm = basePwm;
+  }
+
+  if (newPhase != phase) {
+    phase = newPhase;
+    logMotorTestEvent(testName, "PHASE", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  if (now - lastBeatMs >= 1000) {
+    lastBeatMs = now;
+    logMotorTestEvent(testName, "BEAT", phaseName, elapsed, pwm, basePwm, pulsePwm);
+  }
+
+  motor::write(pwm);
+}
+
+void motor::controlPulseNoPreSpin() {
+    // Direct-pumping control.
+    // If this produces the same wave as preconditioned tests, then direct pumping is not excluded.
+    runNoPreconditionPulseControl(
+      "CONTROL_NO_PRESPIN",
+      3000,   // idle before pulse
+      300,    // pulse duration
+      8000,   // observe after pulse
+      MOTOR_PWM_MAX / 8
+    );
+}
+
+void motor::preconditionPulseTest10s() {
+    runPreconditionThenPulse(
+      "PRE_10S_THEN_PULSE",
+      10000,
+      300,
+      10000,
+      MOTOR_PWM_MAX / 8,
+      false
+    );
+}
+
+void motor::preconditionPulseTest30s() {
+    runPreconditionThenPulse(
+      "PRE_30S_THEN_PULSE",
+      30000,
+      300,
+      10000,
+      MOTOR_PWM_MAX / 8,
+      false
+    );
+}
+
+void motor::preconditionPulseTest60s() {
+    runPreconditionThenPulse(
+      "PRE_60S_THEN_PULSE",
+      60000,
+      300,
+      10000,
+      MOTOR_PWM_MAX / 8,
+      false
+    );
+}
+
+void motor::preconditionPulseTest120s() {
+    runPreconditionThenPulse(
+      "PRE_120S_THEN_PULSE",
+      120000,
+      300,
+      10000,
+      MOTOR_PWM_MAX / 8,
+      false
+    );
+}
+
+void motor::steadyRotorOnlyTest60s() {
+    // False-positive control.
+    // There should be no upward pulse because no pulse is applied.
+    runSteadyOnlyTest(
+      "STEADY_ONLY_60S_NO_PULSE",
+      60000
+    );
+}
+
+void motor::memoryDecayAfterStopTest() {
+    // Builds the column, stops rotor briefly, then pulses.
+    // If effect weakens after stop, the carrier has finite memory/decay.
+    runMemoryDecayAfterStop(
+      "MEMORY_DECAY_AFTER_STOP",
+      60000,  // precondition
+      10000,  // stop/decay window
+      300,    // pulse
+      10000,  // observe after pulse
+      MOTOR_PWM_MAX / 8
+    );
+}
+
+void motor::negativePulseAfterPreconditionTest() {
+    // Negative torsion control.
+    // Should weaken/reverse the surface-pull response compared to positive pulse.
+    runPreconditionThenPulse(
+      "NEGATIVE_PULSE_AFTER_PRE_60S",
+      60000,
+      300,
+      10000,
+      MOTOR_PWM_MAX / 10,
+      true
+    );
 }

@@ -18,6 +18,12 @@
 #define SERVO 12        // Pin to control (pulse) servo
 #define SERVO2 14 // Pin to middle tap of pot
 
+#define MOTOR_PWM_MAX 1023   // 10-bit LEDC for motor
+
+#define PRESET_PWM_CROSS     15
+#define PRESET_PWM_SQUARE    40
+#define PRESET_PWM_TRIANGLE  140
+
 // 4 for flash led or 33 for normal led
 #define VERBOSE 1
 #define PS4CONTROLLER 1
@@ -50,6 +56,8 @@ public:
     static bool Found_Display;
     static bool Found_I2C;
 
+    static bool logCompass;
+
     static void analogWriteESP32(int pin, int value);
 
     static void logln(const char *text);
@@ -73,7 +81,7 @@ public:
     static int motorSequenceIndex;
     static int totalSequences;
     static bool motorSequence;
-    static int motorSpeed;
+    static int motorBasePwmTarget;  // base PWM 0..MOTOR_PWM_MAX (presets + L1/R1/arrows)
 };
 
 #endif // ARDUINO_WEMOS_LOLIN32_LITE_MAIN_H

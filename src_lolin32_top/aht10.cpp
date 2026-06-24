@@ -10,6 +10,7 @@ float aht10::temperature = 0.0;
 float aht10::humidity = 0.0;
 
 void aht10::aht10Setup() {
+    if (!main::Found_I2C) return;
     aht10::aht = new Adafruit_AHTX0();
     if (!aht10::aht->begin()) {
         LOGL("AHT10 not found");
